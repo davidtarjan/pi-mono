@@ -68,6 +68,9 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet:
 			'Run dependent tool calls sequentially in one wrapper call. Each calls item must be shaped like { tool: "name", arguments: { ... } }. Prefer batching predictable next steps to avoid extra tool-call overhead. Stop on the first error.',
 		promptGuidelines: [
+			"Each tool call has overhead because the model must re-read context/cache. Avoid unnecessary one-tool-at-a-time round trips.",
+			"If multi-tool wrapper tools are available, think 2-3 steps ahead and batch the next independent or mechanically dependent calls when you do not need to inspect intermediate results before deciding the next action.",
+			"Use parallel multi-tool wrappers for independent calls. Use sequential/dependent multi-tool wrappers for ordered calls that depend on earlier steps but do not require reflection on intermediate output.",
 			"Each tool call has system overhead because the model must re-read context/cache. Prefer one multi_tool_use_seq_dependent call over multiple single-tool round trips when the next steps are already clear.",
 			"Think about the next 2-3 steps before using tools. If the next ordered actions are predictable, batch them into one wrapper call.",
 			"Use multi_tool_use_seq_dependent when later tool calls depend on earlier ones (for example edit/write then test), but not when you need to inspect or reflect on intermediate output before deciding the next action.",

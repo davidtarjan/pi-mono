@@ -119,15 +119,6 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	}
 
 	// Always include these
-	addGuideline(
-		"Each tool call has overhead because the model must re-read context/cache. Avoid unnecessary one-tool-at-a-time round trips.",
-	);
-	addGuideline(
-		"If multi-tool wrapper tools are available, think 2-3 steps ahead and batch the next independent or mechanically dependent calls when you do not need to inspect intermediate results before deciding the next action.",
-	);
-	addGuideline(
-		"Use parallel multi-tool wrappers for independent calls. Use sequential/dependent multi-tool wrappers for ordered calls that depend on earlier steps but do not require reflection on intermediate output.",
-	);
 	addGuideline("Be concise in your responses");
 	addGuideline("Show file paths clearly when working with files");
 

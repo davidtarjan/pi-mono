@@ -91,17 +91,5 @@ describe("buildSystemPrompt", () => {
 
 			expect(prompt.match(/- Use dynamic_tool for summaries\./g)).toHaveLength(1);
 		});
-
-		test("includes multi-tool planning guidance", () => {
-			const prompt = buildSystemPrompt({
-				selectedTools: ["read", "write"],
-				contextFiles: [],
-				skills: [],
-			});
-
-			expect(prompt).toContain("Each tool call has overhead because the model must re-read context/cache.");
-			expect(prompt).toContain("If multi-tool wrapper tools are available, think 2-3 steps ahead");
-			expect(prompt).toContain("Use parallel multi-tool wrappers for independent calls.");
-		});
 	});
 });
