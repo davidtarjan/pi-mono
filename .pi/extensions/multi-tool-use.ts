@@ -35,6 +35,30 @@ function contentToText(content: AgentToolResult["content"]): string {
 	return text || "(no text output)";
 }
 
+interface OrchestrationStep {
+	tool: string;
+	isError: boolean;
+	contentText: string;
+}
+
+function appendOrchestrationEntry(
+	pi: ExtensionAPI,
+	customType: string,
+	toolCallId: string,
+	calls: Array<{ tool: string; arguments: Record<string, unknown> }>,
+	steps: OrchestrationStep[],
+	stoppedEarly: boolean,
+	failedTool?: string,
+): void {
+	pi.appendEntry(customType, {
+		toolCallId,
+		calls,
+		steps,
+		stoppedEarly,
+		failedTool,
+	});
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "multi_tool_use_seq_dependent",
@@ -53,12 +77,21 @@ export default function (pi: ExtensionAPI) {
 		],
 		parameters: seqDependentSchema,
 		execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
-			const steps: Array<{ tool: string; isError: boolean; contentText: string }> = [];
+			const steps: OrchestrationStep[] = [];
 			for (let index = 0; index < params.calls.length; index++) {
 				const call = params.calls[index];
 				if (call.tool === "multi_tool_use_seq_dependent") {
 					const contentText = "Recursive multi_tool_use_seq_dependent calls are not allowed";
 					steps.push({ tool: call.tool, isError: true, contentText });
+					appendOrchestrationEntry(
+						pi,
+						"multi_tool_use_seq_dependent",
+						toolCallId,
+						params.calls,
+						steps,
+						true,
+						call.tool,
+					);
 					return {
 						content: [{ type: "text", text: contentText }],
 						details: { steps, stoppedEarly: true, failedTool: call.tool },
@@ -77,6 +110,15 @@ export default function (pi: ExtensionAPI) {
 						(step, stepIndex) =>
 							`${stepIndex + 1}. ${step.tool}${step.isError ? " [error]" : ""}\n${step.contentText}`,
 					);
+					appendOrchestrationEntry(
+						pi,
+						"multi_tool_use_seq_dependent",
+						toolCallId,
+						params.calls,
+						steps,
+						true,
+						call.tool,
+					);
 					return {
 						content: [
 							{
@@ -90,6 +132,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const lines = steps.map((step, stepIndex) => `${stepIndex + 1}. ${step.tool}\n${step.contentText}`);
+			appendOrchestrationEntry(pi, "multi_tool_use_seq_dependent", toolCallId, params.calls, steps, false);
 			return {
 				content: [{ type: "text", text: lines.join("\n\n") }],
 				details: { steps, stoppedEarly: false },

@@ -339,12 +339,17 @@ describe("test harness", () => {
 									});
 									lines.push(JSON.stringify(executed.result.content));
 									if (executed.isError) {
+										pi.appendEntry("multi_tool_use_seq_dependent", {
+											stoppedEarly: true,
+											failedTool: call.tool,
+										});
 										return {
 											content: [{ type: "text", text: `Stopped after tool ${index + 1}` }],
 											details: { lines },
 										};
 									}
 								}
+								pi.appendEntry("multi_tool_use_seq_dependent", { stoppedEarly: false, lines });
 								return { content: [{ type: "text", text: lines.join("\n") }], details: { lines } };
 							},
 						});
@@ -370,6 +375,18 @@ describe("test harness", () => {
 		});
 
 		await harness.session.prompt("run dependent tool calls");
+
+		const orchestrationEntry = harness.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === "multi_tool_use_seq_dependent");
+		expect(orchestrationEntry).toBeDefined();
+		if (!orchestrationEntry || orchestrationEntry.type !== "custom") {
+			throw new Error("Expected custom orchestration entry");
+		}
+		expect(orchestrationEntry.data).toMatchObject({
+			stoppedEarly: false,
+			lines: expect.arrayContaining([expect.stringContaining("hello")]),
+		});
 
 		const toolResults = harness
 			.eventsOfType("message_end")
@@ -408,6 +425,10 @@ describe("test harness", () => {
 										signal,
 									});
 									if (executed.isError) {
+										pi.appendEntry("multi_tool_use_seq_dependent", {
+											stoppedEarly: true,
+											failedTool: call.tool,
+										});
 										return {
 											content: [{ type: "text", text: `Stopped after tool ${index + 1}` }],
 											details: {},
@@ -439,6 +460,18 @@ describe("test harness", () => {
 		});
 
 		await harness.session.prompt("run dependent tool calls with failure");
+
+		const orchestrationEntry = harness.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === "multi_tool_use_seq_dependent");
+		expect(orchestrationEntry).toBeDefined();
+		if (!orchestrationEntry || orchestrationEntry.type !== "custom") {
+			throw new Error("Expected custom orchestration entry");
+		}
+		expect(orchestrationEntry.data).toMatchObject({
+			stoppedEarly: true,
+			failedTool: "read",
+		});
 
 		const toolResults = harness
 			.eventsOfType("message_end")
