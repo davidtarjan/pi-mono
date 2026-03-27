@@ -53,6 +53,13 @@ export {
 	lsToolDefinition,
 } from "./ls.js";
 export {
+	createSeqDependentToolDefinition,
+	type SeqDependentToolDetails,
+	type SeqDependentToolInput,
+	seqDependentTool,
+	seqDependentToolDefinition,
+} from "./multi-tool-use.js";
+export {
 	createReadTool,
 	createReadToolDefinition,
 	type ReadOperations,
@@ -95,6 +102,7 @@ import { createEditTool, createEditToolDefinition, editTool, editToolDefinition 
 import { createFindTool, createFindToolDefinition, findTool, findToolDefinition } from "./find.js";
 import { createGrepTool, createGrepToolDefinition, grepTool, grepToolDefinition } from "./grep.js";
 import { createLsTool, createLsToolDefinition, lsTool, lsToolDefinition } from "./ls.js";
+import { createSeqDependentToolDefinition, seqDependentTool, seqDependentToolDefinition } from "./multi-tool-use.js";
 import {
 	createReadTool,
 	createReadToolDefinition,
@@ -107,7 +115,7 @@ import { createWriteTool, createWriteToolDefinition, writeTool, writeToolDefinit
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
 
-export const codingTools: Tool[] = [readTool, bashTool, editTool, writeTool];
+export const codingTools: Tool[] = [readTool, bashTool, editTool, writeTool, seqDependentTool];
 export const readOnlyTools: Tool[] = [readTool, grepTool, findTool, lsTool];
 
 export const allTools = {
@@ -118,6 +126,7 @@ export const allTools = {
 	grep: grepTool,
 	find: findTool,
 	ls: lsTool,
+	"multi_tool_use.seq_dependent": seqDependentTool,
 };
 
 export const allToolDefinitions = {
@@ -128,6 +137,7 @@ export const allToolDefinitions = {
 	grep: grepToolDefinition,
 	find: findToolDefinition,
 	ls: lsToolDefinition,
+	"multi_tool_use.seq_dependent": seqDependentToolDefinition,
 };
 
 export type ToolName = keyof typeof allTools;
@@ -143,6 +153,7 @@ export function createCodingToolDefinitions(cwd: string, options?: ToolsOptions)
 		createBashToolDefinition(cwd, options?.bash),
 		createEditToolDefinition(cwd),
 		createWriteToolDefinition(cwd),
+		createSeqDependentToolDefinition(),
 	];
 }
 
@@ -164,6 +175,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		grep: createGrepToolDefinition(cwd),
 		find: createFindToolDefinition(cwd),
 		ls: createLsToolDefinition(cwd),
+		"multi_tool_use.seq_dependent": createSeqDependentToolDefinition(),
 	};
 }
 
@@ -173,6 +185,7 @@ export function createCodingTools(cwd: string, options?: ToolsOptions): Tool[] {
 		createBashTool(cwd, options?.bash),
 		createEditTool(cwd),
 		createWriteTool(cwd),
+		seqDependentTool,
 	];
 }
 
@@ -189,5 +202,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		grep: createGrepTool(cwd),
 		find: createFindTool(cwd),
 		ls: createLsTool(cwd),
+		"multi_tool_use.seq_dependent": seqDependentTool,
 	};
 }

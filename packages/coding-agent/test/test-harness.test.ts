@@ -3,6 +3,8 @@
  * Validates that the faux provider and session factory work correctly.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
@@ -307,6 +309,73 @@ describe("test harness", () => {
 		await runner!.getCommand("shared-cmd:2")?.handler("second", runner!.createCommandContext());
 
 		expect(calls).toEqual(["alpha:first", "beta:second"]);
+	});
+
+	it("executes multi_tool_use.seq_dependent in order", async () => {
+		harness = createHarness({
+			responses: [
+				{
+					toolCalls: [
+						{
+							name: "multi_tool_use.seq_dependent",
+							args: {
+								calls: [
+									{ tool: "write", arguments: { path: "ordered.txt", content: "hello" } },
+									{ tool: "read", arguments: { path: "ordered.txt" } },
+								],
+							},
+						},
+					],
+				},
+				"done",
+			],
+		});
+
+		await harness.session.prompt("run dependent tool calls");
+
+		const toolResults = harness
+			.eventsOfType("message_end")
+			.filter(
+				(event): event is typeof event & { message: Extract<(typeof event)["message"], { role: "toolResult" }> } =>
+					event.message.role === "toolResult",
+			);
+		const wrapperResult = toolResults.find((event) => event.message.toolName === "multi_tool_use.seq_dependent");
+		expect(wrapperResult).toBeDefined();
+		expect(JSON.stringify(wrapperResult?.message.content)).toContain("hello");
+	});
+
+	it("stops multi_tool_use.seq_dependent on first error", async () => {
+		harness = createHarness({
+			responses: [
+				{
+					toolCalls: [
+						{
+							name: "multi_tool_use.seq_dependent",
+							args: {
+								calls: [
+									{ tool: "read", arguments: { path: "missing.txt" } },
+									{ tool: "write", arguments: { path: "should-not-exist.txt", content: "later" } },
+								],
+							},
+						},
+					],
+				},
+				"done",
+			],
+		});
+
+		await harness.session.prompt("run dependent tool calls with failure");
+
+		const toolResults = harness
+			.eventsOfType("message_end")
+			.filter(
+				(event): event is typeof event & { message: Extract<(typeof event)["message"], { role: "toolResult" }> } =>
+					event.message.role === "toolResult",
+			);
+		const wrapperResult = toolResults.find((event) => event.message.toolName === "multi_tool_use.seq_dependent");
+		expect(wrapperResult?.message.isError).toBe(false);
+		expect(JSON.stringify(wrapperResult?.message.content)).toContain("Stopped after tool 1");
+		expect(existsSync(join(harness.tempDir, "should-not-exist.txt"))).toBe(false);
 	});
 
 	it("session persistence works", async () => {

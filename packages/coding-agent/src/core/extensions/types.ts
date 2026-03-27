@@ -262,6 +262,11 @@ export interface CompactOptions {
 /**
  * Context passed to extension event handlers.
  */
+export interface ExecutedToolResult {
+	result: AgentToolResult<any>;
+	isError: boolean;
+}
+
 export interface ExtensionContext {
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
@@ -291,6 +296,12 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/** Execute another active tool by name. Intended for wrapper/orchestration tools. */
+	runTool(
+		name: string,
+		args: unknown,
+		options?: { toolCallId?: string; signal?: AbortSignal },
+	): Promise<ExecutedToolResult>;
 }
 
 /**
@@ -1406,6 +1417,11 @@ export interface ExtensionContextActions {
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
+	runTool: (
+		name: string,
+		args: unknown,
+		options?: { toolCallId?: string; signal?: AbortSignal },
+	) => Promise<ExecutedToolResult>;
 }
 
 /**

@@ -18,6 +18,7 @@ import type {
 	ContextEvent,
 	ContextEventResult,
 	ContextUsage,
+	ExecutedToolResult,
 	Extension,
 	ExtensionActions,
 	ExtensionCommandContext,
@@ -216,6 +217,14 @@ export class ExtensionRunner {
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
 	private compactFn: (options?: CompactOptions) => void = () => {};
 	private getSystemPromptFn: () => string = () => "";
+	private runToolFn: (
+		name: string,
+		args: unknown,
+		options?: { toolCallId?: string; signal?: AbortSignal },
+	) => Promise<ExecutedToolResult> = async () => ({
+		result: { content: [{ type: "text", text: "Tool runtime not initialized" }], details: {} },
+		isError: true,
+	});
 	private newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
 	private forkHandler: ForkHandler = async () => ({ cancelled: false });
 	private navigateTreeHandler: NavigateTreeHandler = async () => ({ cancelled: false });
@@ -274,6 +283,7 @@ export class ExtensionRunner {
 		this.getContextUsageFn = contextActions.getContextUsage;
 		this.compactFn = contextActions.compact;
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
+		this.runToolFn = contextActions.runTool;
 
 		// Flush provider registrations queued during extension loading
 		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
@@ -551,6 +561,7 @@ export class ExtensionRunner {
 			getContextUsage: () => this.getContextUsageFn(),
 			compact: (options) => this.compactFn(options),
 			getSystemPrompt: () => this.getSystemPromptFn(),
+			runTool: (name, args, options) => this.runToolFn(name, args, options),
 		};
 	}
 

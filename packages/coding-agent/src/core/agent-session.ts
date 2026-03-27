@@ -23,8 +23,14 @@ import type {
 	AgentTool,
 	ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mariozechner/pi-ai";
-import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@mariozechner/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent, ToolCall } from "@mariozechner/pi-ai";
+import {
+	isContextOverflow,
+	modelsAreEqual,
+	resetApiProviders,
+	supportsXhigh,
+	validateToolArguments,
+} from "@mariozechner/pi-ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -46,6 +52,7 @@ import { createToolHtmlRenderer } from "./export-html/tool-renderer.js";
 import {
 	type ContextUsage,
 	type ExtensionCommandContextActions,
+	type ExtensionContext,
 	type ExtensionErrorListener,
 	ExtensionRunner,
 	type ExtensionUIContext,
@@ -772,6 +779,98 @@ export class AgentSession {
 
 	getToolDefinition(name: string): ToolDefinition | undefined {
 		return this._toolDefinitions.get(name)?.definition;
+	}
+
+	async runToolByName(
+		name: string,
+		args: unknown,
+		options?: { toolCallId?: string; signal?: AbortSignal },
+	): Promise<{ result: import("@mariozechner/pi-agent-core").AgentToolResult<any>; isError: boolean }> {
+		const tool = this._toolRegistry.get(name);
+		if (!tool) {
+			return {
+				result: { content: [{ type: "text", text: `Tool ${name} not found` }], details: {} },
+				isError: true,
+			};
+		}
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: options?.toolCallId ?? `nested_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+			name,
+			arguments: (args ?? {}) as Record<string, any>,
+		};
+		try {
+			const validatedArgs = validateToolArguments(tool, toolCall);
+			const result = await tool.execute(toolCall.id, validatedArgs, options?.signal);
+			return { result, isError: false };
+		} catch (error) {
+			return {
+				result: {
+					content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+					details: {},
+				},
+				isError: true,
+			};
+		}
+	}
+
+	private _createToolExecutionContext(): ExtensionContext {
+		const ui =
+			this._extensionUIContext ??
+			({
+				select: async () => undefined,
+				confirm: async () => false,
+				input: async () => undefined,
+				notify: () => {},
+				onTerminalInput: () => () => {},
+				setStatus: () => {},
+				setWorkingMessage: () => {},
+				setWidget: () => {},
+				setFooter: () => {},
+				setHeader: () => {},
+				setTitle: () => {},
+				custom: async () => undefined as never,
+				pasteToEditor: () => {},
+				setEditorText: () => {},
+				getEditorText: () => "",
+				editor: async () => undefined,
+				setEditorComponent: () => {},
+				get theme() {
+					return theme;
+				},
+				getAllThemes: () => [],
+				getTheme: () => undefined,
+				setTheme: () => ({ success: false, error: "UI not available" }),
+				getToolsExpanded: () => false,
+				setToolsExpanded: () => {},
+			} as ExtensionUIContext);
+
+		return {
+			ui,
+			hasUI: this._extensionUIContext !== undefined,
+			cwd: this._cwd,
+			sessionManager: this.sessionManager,
+			modelRegistry: this._modelRegistry,
+			model: this.model,
+			isIdle: () => !this.isStreaming,
+			abort: () => this.abort(),
+			hasPendingMessages: () => this.pendingMessageCount > 0,
+			shutdown: () => this._extensionShutdownHandler?.(),
+			getContextUsage: () => this.getContextUsage(),
+			compact: (options) => {
+				void (async () => {
+					try {
+						const result = await this.compact(options?.customInstructions);
+						options?.onComplete?.(result);
+					} catch (error) {
+						const err = error instanceof Error ? error : new Error(String(error));
+						options?.onError?.(err);
+					}
+				})();
+			},
+			getSystemPrompt: () => this.systemPrompt,
+			runTool: (name, args, options) => this.runToolByName(name, args, options),
+		};
 	}
 
 	/**
@@ -2256,6 +2355,7 @@ export class AgentSession {
 					})();
 				},
 				getSystemPrompt: () => this.systemPrompt,
+				runTool: (name, args, options) => this.runToolByName(name, args, options),
 			},
 			{
 				registerProvider: (name, config) => {
@@ -2318,10 +2418,11 @@ export class AgentSession {
 			? wrapRegisteredTools(allCustomTools, this._extensionRunner)
 			: [];
 
+		const baseCtxFactory = () => this._extensionRunner?.createContext() ?? this._createToolExecutionContext();
 		const toolRegistry = new Map(
 			Array.from(this._baseToolDefinitions.values()).map((definition) => [
 				definition.name,
-				wrapToolDefinition(definition),
+				wrapToolDefinition(definition, baseCtxFactory),
 			]),
 		);
 		for (const tool of wrappedExtensionTools as AgentTool[]) {
@@ -2400,7 +2501,7 @@ export class AgentSession {
 
 		const defaultActiveToolNames = this._baseToolsOverride
 			? Object.keys(this._baseToolsOverride)
-			: ["read", "bash", "edit", "write"];
+			: ["read", "bash", "edit", "write", "multi_tool_use.seq_dependent"];
 		const baseActiveToolNames = options.activeToolNames ?? defaultActiveToolNames;
 		this._refreshToolRegistry({
 			activeToolNames: baseActiveToolNames,
