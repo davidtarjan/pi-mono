@@ -17,6 +17,10 @@ function createContext(tokens: number | null, compact = vi.fn()): ExtensionConte
 		getContextUsage: () => ({ tokens, contextWindow: 200_000, percent: tokens === null ? null : tokens / 2000 }),
 		compact,
 		getSystemPrompt: () => "",
+		runTool: async () => ({
+			result: { content: [{ type: "text", text: "not implemented" }], details: {} },
+			isError: true,
+		}),
 	};
 }
 

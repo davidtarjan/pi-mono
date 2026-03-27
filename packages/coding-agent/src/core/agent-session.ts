@@ -21,10 +21,17 @@ import type {
 	AgentMessage,
 	AgentState,
 	AgentTool,
+	AgentToolResult,
 	ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mariozechner/pi-ai";
-import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@mariozechner/pi-ai";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent, ToolCall } from "@mariozechner/pi-ai";
+import {
+	isContextOverflow,
+	modelsAreEqual,
+	resetApiProviders,
+	supportsXhigh,
+	validateToolArguments,
+} from "@mariozechner/pi-ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -757,6 +764,41 @@ export class AgentSession {
 
 	getToolDefinition(name: string): ToolDefinition | undefined {
 		return this._toolDefinitions.get(name)?.definition;
+	}
+
+	async runToolByName(
+		name: string,
+		args: unknown,
+		options?: { toolCallId?: string; signal?: AbortSignal },
+	): Promise<{ result: AgentToolResult<unknown>; isError: boolean }> {
+		const tool = this._toolRegistry.get(name);
+		if (!tool || !this.getActiveToolNames().includes(name)) {
+			return {
+				result: { content: [{ type: "text", text: `Tool ${name} not found or not active` }], details: {} },
+				isError: true,
+			};
+		}
+
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: options?.toolCallId ?? `nested_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+			name,
+			arguments: (args ?? {}) as Record<string, unknown>,
+		};
+
+		try {
+			const validatedArgs = validateToolArguments(tool, toolCall);
+			const result = await tool.execute(toolCall.id, validatedArgs, options?.signal);
+			return { result, isError: false };
+		} catch (error) {
+			return {
+				result: {
+					content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+					details: {},
+				},
+				isError: true,
+			};
+		}
 	}
 
 	/**
@@ -2237,6 +2279,7 @@ export class AgentSession {
 					})();
 				},
 				getSystemPrompt: () => this.systemPrompt,
+				runTool: (name, args, options) => this.runToolByName(name, args, options),
 			},
 			{
 				registerProvider: (name, config) => {

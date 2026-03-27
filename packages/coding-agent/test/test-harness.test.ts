@@ -3,6 +3,8 @@
  * Validates that the faux provider and session factory work correctly.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
@@ -307,6 +309,147 @@ describe("test harness", () => {
 		await runner!.getCommand("shared-cmd:2")?.handler("second", runner!.createCommandContext());
 
 		expect(calls).toEqual(["alpha:first", "beta:second"]);
+	});
+
+	it("extensions can orchestrate active tools in order", async () => {
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				{
+					path: "<seq-dependent>",
+					factory: (pi) => {
+						pi.registerTool({
+							name: "multi_tool_use_seq_dependent",
+							label: "Seq Dependent",
+							description: "Execute dependent tool calls sequentially in one wrapper call.",
+							parameters: Type.Object({
+								calls: Type.Array(
+									Type.Object({
+										tool: Type.String(),
+										arguments: Type.Record(Type.String(), Type.Unknown()),
+									}),
+								),
+							}),
+							execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+								const lines: string[] = [];
+								for (let index = 0; index < params.calls.length; index++) {
+									const call = params.calls[index];
+									const executed = await ctx.runTool(call.tool, call.arguments, {
+										toolCallId: `${toolCallId}_${index + 1}`,
+										signal,
+									});
+									lines.push(JSON.stringify(executed.result.content));
+									if (executed.isError) {
+										return {
+											content: [{ type: "text", text: `Stopped after tool ${index + 1}` }],
+											details: { lines },
+										};
+									}
+								}
+								return { content: [{ type: "text", text: lines.join("\n") }], details: { lines } };
+							},
+						});
+					},
+				},
+			],
+			responses: [
+				{
+					toolCalls: [
+						{
+							name: "multi_tool_use_seq_dependent",
+							args: {
+								calls: [
+									{ tool: "write", arguments: { path: "ordered.txt", content: "hello" } },
+									{ tool: "read", arguments: { path: "ordered.txt" } },
+								],
+							},
+						},
+					],
+				},
+				"done",
+			],
+		});
+
+		await harness.session.prompt("run dependent tool calls");
+
+		const toolResults = harness
+			.eventsOfType("message_end")
+			.filter(
+				(event): event is typeof event & { message: Extract<(typeof event)["message"], { role: "toolResult" }> } =>
+					event.message.role === "toolResult",
+			);
+		const wrapperResult = toolResults.find((event) => event.message.toolName === "multi_tool_use_seq_dependent");
+		expect(wrapperResult).toBeDefined();
+		expect(JSON.stringify(wrapperResult?.message.content)).toContain("hello");
+	});
+
+	it("extension orchestration stops on first tool error", async () => {
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				{
+					path: "<seq-dependent>",
+					factory: (pi) => {
+						pi.registerTool({
+							name: "multi_tool_use_seq_dependent",
+							label: "Seq Dependent",
+							description: "Execute dependent tool calls sequentially in one wrapper call.",
+							parameters: Type.Object({
+								calls: Type.Array(
+									Type.Object({
+										tool: Type.String(),
+										arguments: Type.Record(Type.String(), Type.Unknown()),
+									}),
+								),
+							}),
+							execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+								for (let index = 0; index < params.calls.length; index++) {
+									const call = params.calls[index];
+									const executed = await ctx.runTool(call.tool, call.arguments, {
+										toolCallId: `${toolCallId}_${index + 1}`,
+										signal,
+									});
+									if (executed.isError) {
+										return {
+											content: [{ type: "text", text: `Stopped after tool ${index + 1}` }],
+											details: {},
+										};
+									}
+								}
+								return { content: [{ type: "text", text: "done" }], details: {} };
+							},
+						});
+					},
+				},
+			],
+			responses: [
+				{
+					toolCalls: [
+						{
+							name: "multi_tool_use_seq_dependent",
+							args: {
+								calls: [
+									{ tool: "read", arguments: { path: "missing.txt" } },
+									{ tool: "write", arguments: { path: "should-not-exist.txt", content: "later" } },
+								],
+							},
+						},
+					],
+				},
+				"done",
+			],
+		});
+
+		await harness.session.prompt("run dependent tool calls with failure");
+
+		const toolResults = harness
+			.eventsOfType("message_end")
+			.filter(
+				(event): event is typeof event & { message: Extract<(typeof event)["message"], { role: "toolResult" }> } =>
+					event.message.role === "toolResult",
+			);
+		const wrapperResult = toolResults.find((event) => event.message.toolName === "multi_tool_use_seq_dependent");
+		expect(wrapperResult?.message.isError).toBe(false);
+		expect(JSON.stringify(wrapperResult?.message.content)).toContain("Stopped after tool 1");
+		expect(existsSync(join(harness.tempDir, "should-not-exist.txt"))).toBe(false);
 	});
 
 	it("session persistence works", async () => {

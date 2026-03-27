@@ -256,6 +256,11 @@ export interface CompactOptions {
 	onError?: (error: Error) => void;
 }
 
+export interface ExecutedToolResult {
+	result: AgentToolResult<unknown>;
+	isError: boolean;
+}
+
 /**
  * Context passed to extension event handlers.
  */
@@ -286,6 +291,12 @@ export interface ExtensionContext {
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
 	getSystemPrompt(): string;
+	/** Execute an active tool through pi's normal lookup, validation, and execution path. */
+	runTool(
+		name: string,
+		args: unknown,
+		options?: { toolCallId?: string; signal?: AbortSignal },
+	): Promise<ExecutedToolResult>;
 }
 
 /**
@@ -1397,6 +1408,11 @@ export interface ExtensionContextActions {
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
+	runTool: (
+		name: string,
+		args: unknown,
+		options?: { toolCallId?: string; signal?: AbortSignal },
+	) => Promise<ExecutedToolResult>;
 }
 
 /**

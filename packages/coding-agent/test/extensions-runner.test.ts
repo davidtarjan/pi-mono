@@ -77,6 +77,10 @@ describe("ExtensionRunner", () => {
 		getContextUsage: () => undefined,
 		compact: () => {},
 		getSystemPrompt: () => "",
+		runTool: async () => ({
+			result: { content: [{ type: "text", text: "not implemented" }], details: {} },
+			isError: true,
+		}),
 	};
 
 	describe("shortcut conflicts", () => {
