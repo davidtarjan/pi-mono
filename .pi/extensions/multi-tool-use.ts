@@ -1,3 +1,16 @@
+/**
+ * Dependent Multi-Tool Extension
+ *
+ * Registers `multi_tool_use.seq_dependent`, a composite tool that runs other
+ * active tools in order via `ctx.runTool(...)`. This keeps the orchestration
+ * policy in an extension while core only provides the minimal nested-tool
+ * execution primitive.
+ *
+ * Prompt metadata is attached via `promptSnippet` and `promptGuidelines`.
+ * When this extension is loaded and the tool is active, pi automatically adds
+ * that metadata to the default system prompt so the model can discover the
+ * wrapper and learn the required `{ tool, arguments }` call shape.
+ */
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
