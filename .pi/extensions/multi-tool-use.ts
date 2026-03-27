@@ -42,9 +42,11 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Execute dependent tool calls sequentially in one wrapper call. Stops on the first error and returns completed step outputs.",
 		promptSnippet:
-			'Run dependent tool calls sequentially in one wrapper call. Each calls item must be shaped like { tool: "name", arguments: { ... } }. Stop on the first error.',
+			'Run dependent tool calls sequentially in one wrapper call. Each calls item must be shaped like { tool: "name", arguments: { ... } }. Prefer batching predictable next steps to avoid extra tool-call overhead. Stop on the first error.',
 		promptGuidelines: [
-			"Use multi_tool_use_seq_dependent when later tool calls depend on earlier ones (for example edit/write then test).",
+			"Each tool call has system overhead because the model must re-read context/cache. Prefer one multi_tool_use_seq_dependent call over multiple single-tool round trips when the next steps are already clear.",
+			"Think about the next 2-3 steps before using tools. If the next ordered actions are predictable, batch them into one wrapper call.",
+			"Use multi_tool_use_seq_dependent when later tool calls depend on earlier ones (for example edit/write then test), but not when you need to inspect or reflect on intermediate output before deciding the next action.",
 			"Provide calls in execution order. This wrapper stops on the first tool error and does not run later steps.",
 			"Each calls entry must be an object with exactly two fields: tool and arguments. Put the target tool parameters inside arguments.",
 			'Example: { "calls": [ { "tool": "write", "arguments": { "path": "a.txt", "content": "hello" } }, { "tool": "read", "arguments": { "path": "a.txt" } } ] }',
