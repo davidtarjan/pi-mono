@@ -1,21 +1,16 @@
 /**
  * Dependent Multi-Tool Extension
  *
- * Registers `multi_tool_use.seq_dependent`, a composite tool that runs other
- * active tools in order via `ctx.runTool(...)`. This keeps the orchestration
- * policy in an extension while core only provides the minimal nested-tool
- * execution primitive.
- *
- * Prompt metadata is attached via `promptSnippet` and `promptGuidelines`.
- * When this extension is loaded and the tool is active, pi automatically adds
- * that metadata to the default system prompt so the model can discover the
- * wrapper and learn the required `{ tool, arguments }` call shape.
+ * Registers `multi_tool_use_seq_dependent`, a composite tool that runs other
+ * active tools in order via `ctx.runTool(...)`. This keeps orchestration
+ * policy in an extension while core provides only the minimal callback into
+ * pi's normal tool lookup, validation, and execution path.
  */
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
-const dependentCallSchema = Type.Object({
+const callSchema = Type.Object({
 	tool: Type.String({ description: "Tool name to execute." }),
 	arguments: Type.Record(Type.String(), Type.Unknown(), {
 		description:
@@ -24,9 +19,17 @@ const dependentCallSchema = Type.Object({
 });
 
 const seqDependentSchema = Type.Object({
-	calls: Type.Array(dependentCallSchema, {
+	calls: Type.Array(callSchema, {
 		description:
 			'Ordered tool calls. Each item must have the shape { tool: string, arguments: object }. Calls execute in order and stop on the first error.',
+		minItems: 1,
+	}),
+});
+
+const parallelSchema = Type.Object({
+	calls: Type.Array(callSchema, {
+		description:
+			'Independent tool calls to execute in parallel. Each item must have the shape { tool: string, arguments: object }.',
 		minItems: 1,
 	}),
 });
@@ -40,43 +43,95 @@ function contentToText(content: AgentToolResult["content"]): string {
 	return text || "(no text output)";
 }
 
+interface OrchestrationStep {
+	tool: string;
+	isError: boolean;
+	contentText: string;
+}
+
+function appendOrchestrationEntry(
+	pi: ExtensionAPI,
+	customType: string,
+	toolCallId: string,
+	calls: Array<{ tool: string; arguments: Record<string, unknown> }>,
+	steps: OrchestrationStep[],
+	stoppedEarly: boolean,
+	failedTool?: string,
+	failedTools?: string[],
+): void {
+	pi.appendEntry(customType, {
+		toolCallId,
+		calls,
+		steps,
+		stoppedEarly,
+		failedTool,
+		failedTools,
+	});
+}
+
+function renderStepLines(steps: OrchestrationStep[]): string[] {
+	return steps.map(
+		(step, stepIndex) => `${stepIndex + 1}. ${step.tool}${step.isError ? " [error]" : ""}\n${step.contentText}`,
+	);
+}
+
 export default function (pi: ExtensionAPI) {
 	pi.registerTool({
-		name: "multi_tool_use.seq_dependent",
+		name: "multi_tool_use_seq_dependent",
 		label: "Seq Dependent",
 		description:
 			"Execute dependent tool calls sequentially in one wrapper call. Stops on the first error and returns completed step outputs.",
 		promptSnippet:
-			'Run dependent tool calls sequentially in one wrapper call. Each calls item must be shaped like { tool: "name", arguments: { ... } }. Stop on the first error.',
+			"Batch a chain of dependent tool calls into a single round trip. Use this when the next 2-3 steps are predictable and must run in order (e.g. write a file then run its tests), but you do not need to inspect intermediate output before deciding the next action. Stops on the first error.",
 		promptGuidelines: [
-			"Use multi_tool_use.seq_dependent when later tool calls depend on earlier ones (for example edit/write then test).",
-			"Provide calls in execution order. This wrapper stops on the first tool error and does not run later steps.",
-			"Each calls entry must be an object with exactly two fields: tool and arguments. Put the target tool parameters inside arguments.",
-			'Example: { "calls": [ { "tool": "write", "arguments": { "path": "a.txt", "content": "hello" } }, { "tool": "read", "arguments": { "path": "a.txt" } } ] }',
+			// WHY — cache re-reads dominate agent cost; batching amortizes them.
+			"Cache re-reads are the majority of the cost of running the agent — every individual tool call forces a full re-read of the conversation context. Batching 2-3 predictable steps into one wrapper call eliminates those extra re-reads and dramatically reduces total cost.",
+			// WHEN to use this vs. the parallel wrapper vs. single calls.
+			"Use this tool when calls must execute in order because later steps depend on earlier ones (e.g. edit → test, write → read-back). Use multi_tool_use_parallel instead when calls are independent. Use neither when you need to read and reason about intermediate output before deciding what to do next.",
+			// HOW — call format and error semantics.
+			"Calls execute in the order given. The wrapper stops on the first tool error and returns all completed outputs up to that point; later steps are skipped.",
+			'Each entry in calls must have exactly two fields: tool (string) and arguments (object with that tool\'s parameters). Example: { "calls": [ { "tool": "write", "arguments": { "path": "a.txt", "content": "hello" } }, { "tool": "read", "arguments": { "path": "a.txt" } } ] }',
 		],
 		parameters: seqDependentSchema,
 		execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
-			const steps: Array<{ tool: string; isError: boolean; contentText: string }> = [];
+			const steps: OrchestrationStep[] = [];
 			for (let index = 0; index < params.calls.length; index++) {
 				const call = params.calls[index];
-				if (call.tool === "multi_tool_use.seq_dependent") {
-					const contentText = "Recursive multi_tool_use.seq_dependent calls are not allowed";
+				if (call.tool === "multi_tool_use_seq_dependent") {
+					const contentText = "Recursive multi_tool_use_seq_dependent calls are not allowed";
 					steps.push({ tool: call.tool, isError: true, contentText });
+					appendOrchestrationEntry(
+						pi,
+						"multi_tool_use_seq_dependent",
+						toolCallId,
+						params.calls,
+						steps,
+						true,
+						call.tool,
+					);
 					return {
 						content: [{ type: "text", text: contentText }],
 						details: { steps, stoppedEarly: true, failedTool: call.tool },
 					};
 				}
+
 				const executed = await ctx.runTool(call.tool, call.arguments, {
 					toolCallId: `${toolCallId}_${index + 1}`,
 					signal,
 				});
 				const contentText = contentToText(executed.result.content);
 				steps.push({ tool: call.tool, isError: executed.isError, contentText });
+
 				if (executed.isError) {
-					const lines = steps.map(
-						(step, stepIndex) =>
-							`${stepIndex + 1}. ${step.tool}${step.isError ? " [error]" : ""}\n${step.contentText}`,
+					const lines = renderStepLines(steps);
+					appendOrchestrationEntry(
+						pi,
+						"multi_tool_use_seq_dependent",
+						toolCallId,
+						params.calls,
+						steps,
+						true,
+						call.tool,
 					);
 					return {
 						content: [
@@ -89,7 +144,74 @@ export default function (pi: ExtensionAPI) {
 					};
 				}
 			}
-			const lines = steps.map((step, stepIndex) => `${stepIndex + 1}. ${step.tool}\n${step.contentText}`);
+
+			const lines = renderStepLines(steps);
+			appendOrchestrationEntry(pi, "multi_tool_use_seq_dependent", toolCallId, params.calls, steps, false);
+			return {
+				content: [{ type: "text", text: lines.join("\n\n") }],
+				details: { steps, stoppedEarly: false },
+			};
+		},
+	});
+
+	pi.registerTool({
+		name: "multi_tool_use_parallel",
+		label: "Parallel",
+		description: "Execute independent tool calls in parallel in one wrapper call and return ordered step outputs.",
+		promptSnippet:
+			"Batch independent tool calls into a single parallel round trip. Use this when you need results from multiple tools that do not depend on each other (e.g. reading several files, running independent searches). All calls run concurrently; results are returned in the original order.",
+		promptGuidelines: [
+			// WHY — cache re-reads dominate agent cost; batching amortizes them and adds concurrency.
+			"Cache re-reads are the majority of the cost of running the agent — every individual tool call forces a full re-read of the conversation context. Batching independent calls into one parallel wrapper eliminates those extra re-reads and runs them concurrently.",
+			// WHEN — independence requirement and preference over harness-level parallel.
+			"Only use this for calls that are truly independent — no call may depend on the output of another. If calls must run in order, use multi_tool_use_seq_dependent instead. When both this tool and a harness-level parallel mechanism are available, prefer this tool so invocations are persisted in the session log.",
+			// HOW — call format and error semantics.
+			"All calls run concurrently. If some fail, the wrapper still returns results for all calls (failures are marked); it does not stop early.",
+			'Each entry in calls must have exactly two fields: tool (string) and arguments (object with that tool\'s parameters). Example: { "calls": [ { "tool": "read", "arguments": { "path": "a.txt" } }, { "tool": "read", "arguments": { "path": "b.txt" } } ] }',
+		],
+		parameters: parallelSchema,
+		execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+			const steps = await Promise.all(
+				params.calls.map(async (call, index): Promise<OrchestrationStep> => {
+					if (call.tool === "multi_tool_use_parallel") {
+						return {
+							tool: call.tool,
+							isError: true,
+							contentText: "Recursive multi_tool_use_parallel calls are not allowed",
+						};
+					}
+					const executed = await ctx.runTool(call.tool, call.arguments, {
+						toolCallId: `${toolCallId}_${index + 1}`,
+						signal,
+					});
+					return {
+						tool: call.tool,
+						isError: executed.isError,
+						contentText: contentToText(executed.result.content),
+					};
+				}),
+			);
+
+			const failedTools = steps.filter((step) => step.isError).map((step) => step.tool);
+			const lines = renderStepLines(steps);
+			appendOrchestrationEntry(
+				pi,
+				"multi_tool_use_parallel",
+				toolCallId,
+				params.calls,
+				steps,
+				false,
+				failedTools[0],
+				failedTools,
+			);
+
+			if (failedTools.length > 0) {
+				return {
+					content: [{ type: "text", text: `One or more parallel tool calls failed.\n\n${lines.join("\n\n")}` }],
+					details: { steps, stoppedEarly: false, failedTools },
+				};
+			}
+
 			return {
 				content: [{ type: "text", text: lines.join("\n\n") }],
 				details: { steps, stoppedEarly: false },

@@ -3,7 +3,7 @@
  * Validates that the faux provider and session factory work correctly.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
@@ -522,6 +522,199 @@ describe("test harness", () => {
 		expect(wrapperResult?.message.isError).toBe(false);
 		expect(JSON.stringify(wrapperResult?.message.content)).toContain("Stopped after tool 1");
 		expect(existsSync(join(harness.tempDir, "should-not-exist.txt"))).toBe(false);
+	});
+
+	it("project multi-tool extension runs parallel calls and logs wrapper metadata", async () => {
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				{
+					path: "<parallel>",
+					factory: (pi) => {
+						pi.registerTool({
+							name: "multi_tool_use_parallel",
+							label: "Parallel",
+							description: "Execute independent tool calls in parallel in one wrapper call.",
+							parameters: Type.Object({
+								calls: Type.Array(
+									Type.Object({
+										tool: Type.String(),
+										arguments: Type.Record(Type.String(), Type.Unknown()),
+									}),
+								),
+							}),
+							execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+								const steps = await Promise.all(
+									params.calls.map(async (call, index) => {
+										const executed = await ctx.runTool(call.tool, call.arguments, {
+											toolCallId: `${toolCallId}_${index + 1}`,
+											signal,
+										});
+										const contentText = JSON.stringify(executed.result.content)
+											.replaceAll('[{"type":"text","text":"', "")
+											.replaceAll('"}]', "");
+										return { tool: call.tool, isError: executed.isError, contentText };
+									}),
+								);
+								const failedTools = steps.filter((step) => step.isError).map((step) => step.tool);
+								pi.appendEntry("multi_tool_use_parallel", {
+									stoppedEarly: false,
+									failedTool: failedTools[0],
+									failedTools,
+									steps,
+								});
+								return {
+									content: [{ type: "text", text: steps.map((step) => step.contentText).join("\n") }],
+									details: { steps, failedTools },
+								};
+							},
+						});
+					},
+				},
+			],
+			responses: [
+				{
+					toolCalls: [
+						{
+							name: "multi_tool_use_parallel",
+							args: {
+								calls: [
+									{ tool: "read", arguments: { path: "alpha.txt" } },
+									{ tool: "read", arguments: { path: "beta.txt" } },
+								],
+							},
+						},
+					],
+				},
+				"done",
+			],
+		});
+
+		writeFileSync(join(harness.tempDir, "alpha.txt"), "alpha");
+		writeFileSync(join(harness.tempDir, "beta.txt"), "beta");
+
+		await harness.session.prompt("run parallel reads");
+
+		const orchestrationEntry = harness.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === "multi_tool_use_parallel");
+		expect(orchestrationEntry).toBeDefined();
+		if (!orchestrationEntry || orchestrationEntry.type !== "custom") {
+			throw new Error("Expected custom parallel orchestration entry");
+		}
+		expect(orchestrationEntry.data).toMatchObject({
+			stoppedEarly: false,
+			steps: [
+				{ tool: "read", isError: false, contentText: "alpha" },
+				{ tool: "read", isError: false, contentText: "beta" },
+			],
+		});
+
+		const toolResults = harness
+			.eventsOfType("message_end")
+			.filter(
+				(event): event is typeof event & { message: Extract<(typeof event)["message"], { role: "toolResult" }> } =>
+					event.message.role === "toolResult",
+			);
+		const wrapperResult = toolResults.find((event) => event.message.toolName === "multi_tool_use_parallel");
+		expect(wrapperResult).toBeDefined();
+		expect(JSON.stringify(wrapperResult?.message.content)).toContain("alpha");
+		expect(JSON.stringify(wrapperResult?.message.content)).toContain("beta");
+	});
+
+	it("project multi-tool extension records parallel failures without cancelling sibling calls", async () => {
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				{
+					path: "<parallel>",
+					factory: (pi) => {
+						pi.registerTool({
+							name: "multi_tool_use_parallel",
+							label: "Parallel",
+							description: "Execute independent tool calls in parallel in one wrapper call.",
+							parameters: Type.Object({
+								calls: Type.Array(
+									Type.Object({
+										tool: Type.String(),
+										arguments: Type.Record(Type.String(), Type.Unknown()),
+									}),
+								),
+							}),
+							execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+								const steps = await Promise.all(
+									params.calls.map(async (call, index) => {
+										const executed = await ctx.runTool(call.tool, call.arguments, {
+											toolCallId: `${toolCallId}_${index + 1}`,
+											signal,
+										});
+										const contentText = JSON.stringify(executed.result.content)
+											.replaceAll('[{"type":"text","text":"', "")
+											.replaceAll('"}]', "");
+										return { tool: call.tool, isError: executed.isError, contentText };
+									}),
+								);
+								const failedTools = steps.filter((step) => step.isError).map((step) => step.tool);
+								pi.appendEntry("multi_tool_use_parallel", {
+									stoppedEarly: false,
+									failedTool: failedTools[0],
+									failedTools,
+									steps,
+								});
+								const text =
+									failedTools.length > 0
+										? `One or more parallel tool calls failed.\n\n${steps.map((step) => step.contentText).join("\n")}`
+										: steps.map((step) => step.contentText).join("\n");
+								return {
+									content: [{ type: "text", text }],
+									details: { steps, failedTools },
+								};
+							},
+						});
+					},
+				},
+			],
+			responses: [
+				{
+					toolCalls: [
+						{
+							name: "multi_tool_use_parallel",
+							args: {
+								calls: [
+									{ tool: "read", arguments: { path: "missing.txt" } },
+									{ tool: "write", arguments: { path: "parallel.txt", content: "later" } },
+								],
+							},
+						},
+					],
+				},
+				"done",
+			],
+		});
+
+		await harness.session.prompt("run parallel tools with one failure");
+
+		const orchestrationEntry = harness.sessionManager
+			.getEntries()
+			.find((entry) => entry.type === "custom" && entry.customType === "multi_tool_use_parallel");
+		expect(orchestrationEntry).toBeDefined();
+		if (!orchestrationEntry || orchestrationEntry.type !== "custom") {
+			throw new Error("Expected custom parallel orchestration entry");
+		}
+		expect(orchestrationEntry.data).toMatchObject({
+			stoppedEarly: false,
+			failedTool: "read",
+			failedTools: ["read"],
+		});
+		expect(existsSync(join(harness.tempDir, "parallel.txt"))).toBe(true);
+
+		const toolResults = harness
+			.eventsOfType("message_end")
+			.filter(
+				(event): event is typeof event & { message: Extract<(typeof event)["message"], { role: "toolResult" }> } =>
+					event.message.role === "toolResult",
+			);
+		const wrapperResult = toolResults.find((event) => event.message.toolName === "multi_tool_use_parallel");
+		expect(wrapperResult?.message.isError).toBe(false);
+		expect(JSON.stringify(wrapperResult?.message.content)).toContain("One or more parallel tool calls failed");
 	});
 
 	it("session persistence works", async () => {
