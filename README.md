@@ -8,6 +8,10 @@ OSS weekend runs Friday, March 27, 2026 through Monday, April 6, 2026. New issue
 
 ---
 
+> **Fork note:** This fork adds project-local extensions in `.pi/extensions/` that demonstrate batched tool calls — `multi_tool_use_seq_dependent` for ordered dependent steps and `multi_tool_use_parallel` for concurrent independent calls. See `.pi/extensions/multi-tool-use.ts`.
+
+---
+
 <p align="center">
   <a href="https://shittycodingagent.ai">
     <img src="https://shittycodingagent.ai/logo.svg" alt="pi logo" width="128">
