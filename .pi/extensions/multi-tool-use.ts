@@ -66,17 +66,12 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Execute dependent tool calls sequentially in one wrapper call. Stops on the first error and returns completed step outputs.",
 		promptSnippet:
-			'Run dependent tool calls sequentially in one wrapper call. Each calls item must be shaped like { tool: "name", arguments: { ... } }. Prefer batching predictable next steps to avoid extra tool-call overhead. Stop on the first error.',
+			"Batch a chain of dependent tool calls into a single round trip. Use this when the next 2-3 steps are predictable and must run in order (e.g. write a file then run its tests), but you do not need to inspect intermediate output before deciding the next action. Stops on the first error.",
 		promptGuidelines: [
-			"Each tool call has overhead because the model must re-read context/cache. Avoid unnecessary one-tool-at-a-time round trips.",
-			"If multi-tool wrapper tools are available, think 2-3 steps ahead and batch the next independent or mechanically dependent calls when you do not need to inspect intermediate results before deciding the next action.",
-			"Use parallel multi-tool wrappers for independent calls. Use sequential/dependent multi-tool wrappers for ordered calls that depend on earlier steps but do not require reflection on intermediate output.",
-			"Each tool call has system overhead because the model must re-read context/cache. Prefer one multi_tool_use_seq_dependent call over multiple single-tool round trips when the next steps are already clear.",
-			"Think about the next 2-3 steps before using tools. If the next ordered actions are predictable, batch them into one wrapper call.",
-			"Use multi_tool_use_seq_dependent when later tool calls depend on earlier ones (for example edit/write then test), but not when you need to inspect or reflect on intermediate output before deciding the next action.",
-			"Provide calls in execution order. This wrapper stops on the first tool error and does not run later steps.",
-			"Each calls entry must be an object with exactly two fields: tool and arguments. Put the target tool parameters inside arguments.",
-			'Example: { "calls": [ { "tool": "write", "arguments": { "path": "a.txt", "content": "hello" } }, { "tool": "read", "arguments": { "path": "a.txt" } } ] }',
+			"Cache re-reads are the majority of the cost of running the agent — every individual tool call forces a full re-read of the conversation context. Batching 2-3 predictable steps into one wrapper call eliminates those extra re-reads and dramatically reduces total cost.",
+			"Use this tool when calls must execute in order because later steps depend on earlier ones (e.g. edit → test, write → read-back). Use multi_tool_use_parallel instead when calls are independent. Use neither when you need to read and reason about intermediate output before deciding what to do next.",
+			"Calls execute in the order given. The wrapper stops on the first tool error and returns all completed outputs up to that point; later steps are skipped.",
+			'Each entry in calls must have exactly two fields: tool (string) and arguments (object with that tool\'s parameters). Example: { "calls": [ { "tool": "write", "arguments": { "path": "a.txt", "content": "hello" } }, { "tool": "read", "arguments": { "path": "a.txt" } } ] }',
 		],
 		parameters: seqDependentSchema,
 		execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
