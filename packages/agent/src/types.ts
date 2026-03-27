@@ -67,8 +67,12 @@ export interface AfterToolCallResult {
 
 /** Context passed to `beforeToolCall`. */
 export interface BeforeToolCallContext {
-	/** The assistant message that requested the tool call. */
-	assistantMessage: AssistantMessage;
+	/**
+	 * The assistant message that requested the tool call.
+	 * Undefined when the tool call originates from outside the normal agent loop
+	 * (e.g. a nested/wrapper tool executing a sub-tool directly).
+	 */
+	assistantMessage: AssistantMessage | undefined;
 	/** The raw tool call block from `assistantMessage.content`. */
 	toolCall: AgentToolCall;
 	/** Validated tool arguments for the target tool schema. */
@@ -79,8 +83,12 @@ export interface BeforeToolCallContext {
 
 /** Context passed to `afterToolCall`. */
 export interface AfterToolCallContext {
-	/** The assistant message that requested the tool call. */
-	assistantMessage: AssistantMessage;
+	/**
+	 * The assistant message that requested the tool call.
+	 * Undefined when the tool call originates from outside the normal agent loop
+	 * (e.g. a nested/wrapper tool executing a sub-tool directly).
+	 */
+	assistantMessage: AssistantMessage | undefined;
 	/** The raw tool call block from `assistantMessage.content`. */
 	toolCall: AgentToolCall;
 	/** Validated tool arguments for the target tool schema. */

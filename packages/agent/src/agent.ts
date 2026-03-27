@@ -237,12 +237,24 @@ export class Agent {
 		this._toolExecution = value;
 	}
 
+	get beforeToolCall():
+		| ((context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>)
+		| undefined {
+		return this._beforeToolCall;
+	}
+
 	setBeforeToolCall(
 		value:
 			| ((context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>)
 			| undefined,
 	) {
 		this._beforeToolCall = value;
+	}
+
+	get afterToolCall():
+		| ((context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>)
+		| undefined {
+		return this._afterToolCall;
 	}
 
 	setAfterToolCall(

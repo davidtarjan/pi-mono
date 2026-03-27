@@ -15,23 +15,19 @@
 
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import type {
-	Agent,
-	AgentEvent,
-	AgentMessage,
-	AgentState,
-	AgentTool,
-	AgentToolResult,
-	ThinkingLevel,
-} from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ImageContent, Message, Model, TextContent, ToolCall } from "@mariozechner/pi-ai";
 import {
-	isContextOverflow,
-	modelsAreEqual,
-	resetApiProviders,
-	supportsXhigh,
-	validateToolArguments,
-} from "@mariozechner/pi-ai";
+	type Agent,
+	type AgentEvent,
+	type AgentMessage,
+	type AgentState,
+	type AgentTool,
+	type AgentToolCall,
+	type AgentToolResult,
+	executeSingleToolCall,
+	type ThinkingLevel,
+} from "@mariozechner/pi-agent-core";
+import type { AssistantMessage, ImageContent, Message, Model, TextContent } from "@mariozechner/pi-ai";
+import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@mariozechner/pi-ai";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -779,26 +775,27 @@ export class AgentSession {
 			};
 		}
 
-		const toolCall: ToolCall = {
+		const toolCall: AgentToolCall = {
 			type: "toolCall",
 			id: options?.toolCallId ?? `nested_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 			name,
 			arguments: (args ?? {}) as Record<string, unknown>,
 		};
 
-		try {
-			const validatedArgs = validateToolArguments(tool, toolCall);
-			const result = await tool.execute(toolCall.id, validatedArgs, options?.signal);
-			return { result, isError: false };
-		} catch (error) {
-			return {
-				result: {
-					content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-					details: {},
-				},
-				isError: true,
-			};
-		}
+		const context = {
+			systemPrompt: this.agent.state.systemPrompt,
+			tools: this.agent.state.tools,
+			messages: [],
+		};
+
+		return executeSingleToolCall(
+			tool,
+			toolCall,
+			context,
+			{ beforeToolCall: this.agent.beforeToolCall, afterToolCall: this.agent.afterToolCall },
+			options?.signal,
+			() => {},
+		);
 	}
 
 	/**

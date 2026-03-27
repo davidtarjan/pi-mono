@@ -457,7 +457,7 @@ type ExecutedToolCallOutcome = {
 
 async function prepareToolCall(
 	currentContext: AgentContext,
-	assistantMessage: AssistantMessage,
+	assistantMessage: AssistantMessage | undefined,
 	toolCall: AgentToolCall,
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
@@ -545,7 +545,7 @@ async function executePreparedToolCall(
 
 async function finalizeExecutedToolCall(
 	currentContext: AgentContext,
-	assistantMessage: AssistantMessage,
+	assistantMessage: AssistantMessage | undefined,
 	prepared: PreparedToolCall,
 	executed: ExecutedToolCallOutcome,
 	config: AgentLoopConfig,
@@ -577,6 +577,46 @@ async function finalizeExecutedToolCall(
 	}
 
 	return await emitToolCallOutcome(prepared.toolCall, result, isError, emit);
+}
+
+/**
+ * Run the full prepare → execute → finalize pipeline for a single tool call.
+ *
+ * This is the same pipeline used by the agent loop internally, but exposed for
+ * callers (e.g. wrapper tools) that need to invoke a tool outside the normal loop.
+ *
+ * - `assistantMessage` is always `undefined` since there is no parent assistant message
+ *   for nested/wrapper tool calls. Both `beforeToolCall` and `afterToolCall` hooks
+ *   receive `undefined` for `assistantMessage`.
+ * - Pass a no-op `() => {}` for `emit` to avoid surfacing nested tool execution
+ *   events into the main session event stream.
+ */
+export async function executeSingleToolCall(
+	_tool: AgentTool<any>,
+	toolCall: AgentToolCall,
+	context: AgentContext,
+	config: Pick<AgentLoopConfig, "beforeToolCall" | "afterToolCall">,
+	signal: AbortSignal | undefined,
+	emit: AgentEventSink,
+): Promise<{ result: AgentToolResult<unknown>; isError: boolean }> {
+	const preparation = await prepareToolCall(context, undefined, toolCall, config as AgentLoopConfig, signal);
+	if (preparation.kind === "immediate") {
+		return { result: preparation.result, isError: preparation.isError };
+	}
+	const executed = await executePreparedToolCall(preparation, signal, emit);
+	const toolResultMessage = await finalizeExecutedToolCall(
+		context,
+		undefined,
+		preparation,
+		executed,
+		config as AgentLoopConfig,
+		signal,
+		emit,
+	);
+	return {
+		result: { content: toolResultMessage.content, details: toolResultMessage.details },
+		isError: toolResultMessage.isError,
+	};
 }
 
 function createErrorToolResult(message: string): AgentToolResult<any> {
