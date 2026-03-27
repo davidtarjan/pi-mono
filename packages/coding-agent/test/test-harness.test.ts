@@ -312,7 +312,45 @@ describe("test harness", () => {
 	});
 
 	it("executes multi_tool_use.seq_dependent in order", async () => {
-		harness = createHarness({
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				{
+					path: "<multi-tool-use>",
+					factory: (pi) => {
+						pi.registerTool({
+							name: "multi_tool_use.seq_dependent",
+							label: "Seq Dependent",
+							description: "Execute dependent tool calls sequentially in one wrapper call.",
+							parameters: Type.Object({
+								calls: Type.Array(
+									Type.Object({
+										tool: Type.String(),
+										arguments: Type.Record(Type.String(), Type.Unknown()),
+									}),
+								),
+							}),
+							execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+								const outputs: string[] = [];
+								for (let index = 0; index < params.calls.length; index++) {
+									const call = params.calls[index];
+									const result = await ctx.runTool(call.tool, call.arguments, {
+										toolCallId: `${toolCallId}_${index + 1}`,
+										signal,
+									});
+									outputs.push(JSON.stringify(result.result.content));
+									if (result.isError) {
+										return {
+											content: [{ type: "text", text: `Stopped after tool ${index + 1}` }],
+											details: { outputs },
+										};
+									}
+								}
+								return { content: [{ type: "text", text: outputs.join("\n") }], details: { outputs } };
+							},
+						});
+					},
+				},
+			],
 			responses: [
 				{
 					toolCalls: [
@@ -345,7 +383,43 @@ describe("test harness", () => {
 	});
 
 	it("stops multi_tool_use.seq_dependent on first error", async () => {
-		harness = createHarness({
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				{
+					path: "<multi-tool-use>",
+					factory: (pi) => {
+						pi.registerTool({
+							name: "multi_tool_use.seq_dependent",
+							label: "Seq Dependent",
+							description: "Execute dependent tool calls sequentially in one wrapper call.",
+							parameters: Type.Object({
+								calls: Type.Array(
+									Type.Object({
+										tool: Type.String(),
+										arguments: Type.Record(Type.String(), Type.Unknown()),
+									}),
+								),
+							}),
+							execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+								for (let index = 0; index < params.calls.length; index++) {
+									const call = params.calls[index];
+									const result = await ctx.runTool(call.tool, call.arguments, {
+										toolCallId: `${toolCallId}_${index + 1}`,
+										signal,
+									});
+									if (result.isError) {
+										return {
+											content: [{ type: "text", text: `Stopped after tool ${index + 1}` }],
+											details: {},
+										};
+									}
+								}
+								return { content: [{ type: "text", text: "done" }], details: {} };
+							},
+						});
+					},
+				},
+			],
 			responses: [
 				{
 					toolCalls: [

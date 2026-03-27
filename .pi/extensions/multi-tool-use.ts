@@ -1,6 +1,6 @@
-import { type Static, Type } from "@sinclair/typebox";
-import type { ToolDefinition } from "../extensions/types.js";
-import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 
 const dependentCallSchema = Type.Object({
 	tool: Type.String({ description: "Tool name to execute." }),
@@ -13,34 +13,22 @@ const dependentCallSchema = Type.Object({
 const seqDependentSchema = Type.Object({
 	calls: Type.Array(dependentCallSchema, {
 		description:
-			"Ordered tool calls. Each item must have the shape { tool: string, arguments: object }. Calls execute in order and stop on the first error.",
+			'Ordered tool calls. Each item must have the shape { tool: string, arguments: object }. Calls execute in order and stop on the first error.',
 		minItems: 1,
 	}),
 });
 
-export type SeqDependentToolInput = Static<typeof seqDependentSchema>;
-
-export interface SeqDependentToolDetails {
-	steps: Array<{
-		tool: string;
-		isError: boolean;
-		contentText: string;
-	}>;
-	stoppedEarly: boolean;
-	failedTool?: string;
-}
-
-function contentToText(content: Array<{ type: string; text?: string }>): string {
+function contentToText(content: AgentToolResult["content"]): string {
 	const text = content
-		.filter((block): block is { type: string; text: string } => typeof (block as { text?: string }).text === "string")
+		.filter((block): block is { type: string; text: string } => "text" in block && typeof block.text === "string")
 		.map((block) => block.text)
 		.join("\n")
 		.trim();
 	return text || "(no text output)";
 }
 
-export function createSeqDependentToolDefinition(): ToolDefinition<typeof seqDependentSchema, SeqDependentToolDetails> {
-	return {
+export default function (pi: ExtensionAPI) {
+	pi.registerTool({
 		name: "multi_tool_use.seq_dependent",
 		label: "Seq Dependent",
 		description:
@@ -55,7 +43,7 @@ export function createSeqDependentToolDefinition(): ToolDefinition<typeof seqDep
 		],
 		parameters: seqDependentSchema,
 		execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
-			const steps: SeqDependentToolDetails["steps"] = [];
+			const steps: Array<{ tool: string; isError: boolean; contentText: string }> = [];
 			for (let index = 0; index < params.calls.length; index++) {
 				const call = params.calls[index];
 				if (call.tool === "multi_tool_use.seq_dependent") {
@@ -70,7 +58,7 @@ export function createSeqDependentToolDefinition(): ToolDefinition<typeof seqDep
 					toolCallId: `${toolCallId}_${index + 1}`,
 					signal,
 				});
-				const contentText = contentToText(executed.result.content as Array<{ type: string; text?: string }>);
+				const contentText = contentToText(executed.result.content);
 				steps.push({ tool: call.tool, isError: executed.isError, contentText });
 				if (executed.isError) {
 					const lines = steps.map(
@@ -94,8 +82,5 @@ export function createSeqDependentToolDefinition(): ToolDefinition<typeof seqDep
 				details: { steps, stoppedEarly: false },
 			};
 		},
-	};
+	});
 }
-
-export const seqDependentToolDefinition = createSeqDependentToolDefinition();
-export const seqDependentTool = wrapToolDefinition(seqDependentToolDefinition);
