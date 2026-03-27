@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `ctx.runTool(name, args, options?)` to `ExtensionContext` so wrapper tools can invoke other active tools through the full before/after hook pipeline, including permission gates and input mutation handlers
+
 ## [0.63.1] - 2026-03-27
 
 ### Added

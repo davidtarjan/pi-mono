@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `executeSingleToolCall` export for running a single tool through the full prepare/execute/finalize pipeline including before/after hooks
+- Made `assistantMessage` optional in `BeforeToolCallContext` and `AfterToolCallContext` to support nested tool calls that have no parent assistant message
+
 ## [0.63.1] - 2026-03-27
 
 ## [0.63.0] - 2026-03-27

@@ -819,6 +819,26 @@ pi.on("before_agent_start", (event, ctx) => {
 });
 ```
 
+### ctx.runTool()
+
+Execute an active tool through the full before/after hook pipeline. Permission gates, input mutation handlers, and result overrides registered via `tool_call` and `tool_result` events all apply.
+
+```typescript
+pi.registerTool({
+  name: "my_wrapper",
+  // ...
+  execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+    const { result, isError } = await ctx.runTool("bash", { command: "echo hello" }, {
+      toolCallId: `${toolCallId}_1`,
+      signal,
+    });
+    return { content: result.content, details: {} };
+  },
+});
+```
+
+`assistantMessage` is `undefined` in `tool_call` and `tool_result` handlers for nested calls since there is no parent assistant message.
+
 ## ExtensionCommandContext
 
 Command handlers receive `ExtensionCommandContext`, which extends `ExtensionContext` with session control methods. These are only available in commands because they can deadlock if called from event handlers.
