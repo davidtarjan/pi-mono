@@ -206,7 +206,7 @@ export function convertResponsesMessages<TApi extends Api>(
 						type: "function_call",
 						id: itemId,
 						call_id: callId,
-						name: toolCall.name,
+						name: encodeOpenAIToolName(toolCall.name),
 						arguments: JSON.stringify(toolCall.arguments),
 					});
 				}
@@ -264,11 +264,19 @@ export function convertResponsesMessages<TApi extends Api>(
 // Tool conversion
 // =============================================================================
 
+function encodeOpenAIToolName(name: string): string {
+	return name.replace(/[^a-zA-Z0-9_-]/g, (char) => `_x${char.charCodeAt(0).toString(16)}_`);
+}
+
+function decodeOpenAIToolName(name: string): string {
+	return name.replace(/_x([0-9a-fA-F]+)_/g, (_match, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+}
+
 export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesToolsOptions): OpenAITool[] {
 	const strict = options?.strict === undefined ? false : options.strict;
 	return tools.map((tool) => ({
 		type: "function",
-		name: tool.name,
+		name: encodeOpenAIToolName(tool.name),
 		description: tool.description,
 		parameters: tool.parameters as any, // TypeBox already generates JSON Schema
 		strict,
@@ -311,7 +319,7 @@ export async function processResponsesStream<TApi extends Api>(
 				currentBlock = {
 					type: "toolCall",
 					id: `${item.call_id}|${item.id}`,
-					name: item.name,
+					name: decodeOpenAIToolName(item.name),
 					arguments: {},
 					partialJson: item.arguments || "",
 				};
