@@ -382,6 +382,78 @@ describe("test harness", () => {
 		expect(JSON.stringify(wrapperResult?.message.content)).toContain("hello");
 	});
 
+	it("emits nested tool execution events for multi_tool_use.seq_dependent", async () => {
+		harness = await createHarnessWithExtensions({
+			extensionFactories: [
+				{
+					path: "<multi-tool-use>",
+					factory: (pi) => {
+						pi.registerTool({
+							name: "multi_tool_use.seq_dependent",
+							label: "Seq Dependent",
+							description: "Execute dependent tool calls sequentially in one wrapper call.",
+							parameters: Type.Object({
+								calls: Type.Array(
+									Type.Object({
+										tool: Type.String(),
+										arguments: Type.Record(Type.String(), Type.Unknown()),
+									}),
+								),
+							}),
+							execute: async (toolCallId, params, signal, _onUpdate, ctx) => {
+								for (let index = 0; index < params.calls.length; index++) {
+									const call = params.calls[index];
+									const result = await ctx.runTool(call.tool, call.arguments, {
+										toolCallId: `${toolCallId}_${index + 1}`,
+										signal,
+									});
+									if (result.isError) {
+										return {
+											content: [{ type: "text", text: `Stopped after tool ${index + 1}` }],
+											details: {},
+										};
+									}
+								}
+								return { content: [{ type: "text", text: "done" }], details: {} };
+							},
+						});
+					},
+				},
+			],
+			responses: [
+				{
+					toolCalls: [
+						{
+							name: "multi_tool_use.seq_dependent",
+							args: {
+								calls: [
+									{ tool: "write", arguments: { path: "ordered.txt", content: "hello" } },
+									{ tool: "read", arguments: { path: "ordered.txt" } },
+								],
+							},
+						},
+					],
+				},
+				"done",
+			],
+		});
+
+		await harness.session.prompt("run dependent tool calls");
+
+		const nestedStarts = harness
+			.eventsOfType("tool_execution_start")
+			.filter((event) => event.toolName !== "multi_tool_use.seq_dependent");
+		const nestedEnds = harness
+			.eventsOfType("tool_execution_end")
+			.filter((event) => event.toolName !== "multi_tool_use.seq_dependent");
+
+		expect(nestedStarts.map((event) => event.toolName)).toEqual(["write", "read"]);
+		expect(nestedEnds.map((event) => ({ toolName: event.toolName, isError: event.isError }))).toEqual([
+			{ toolName: "write", isError: false },
+			{ toolName: "read", isError: false },
+		]);
+	});
+
 	it("stops multi_tool_use.seq_dependent on first error", async () => {
 		harness = await createHarnessWithExtensions({
 			extensionFactories: [

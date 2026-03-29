@@ -21,16 +21,12 @@ import type {
 	AgentMessage,
 	AgentState,
 	AgentTool,
+	AgentToolResult,
 	ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, TextContent, ToolCall } from "@mariozechner/pi-ai";
-import {
-	isContextOverflow,
-	modelsAreEqual,
-	resetApiProviders,
-	supportsXhigh,
-	validateToolArguments,
-} from "@mariozechner/pi-ai";
+import { isContextOverflow, modelsAreEqual, resetApiProviders, supportsXhigh } from "@mariozechner/pi-ai";
+import { executeSingleToolCall } from "../../../agent/src/agent-loop.js";
 import { getDocsPath } from "../config.js";
 import { theme } from "../modes/interactive/theme/theme.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
@@ -365,44 +361,28 @@ export class AgentSession {
 	 * happens here instead of in wrappers.
 	 */
 	private _installAgentToolHooks(): void {
-		this.agent.beforeToolCall = async ({ toolCall, args }) => {
-			const runner = this._extensionRunner;
-			if (!runner?.hasHandlers("tool_call")) {
-				return undefined;
-			}
-
+		this.agent.beforeToolCall = async ({ toolCall, args }: { toolCall: ToolCall; args: unknown }) => {
 			await this._agentEventQueue;
-
-			try {
-				return await runner.emitToolCall({
-					type: "tool_call",
-					toolName: toolCall.name,
-					toolCallId: toolCall.id,
-					input: args as Record<string, unknown>,
-				});
-			} catch (err) {
-				if (err instanceof Error) {
-					throw err;
-				}
-				throw new Error(`Extension failed, blocking execution: ${String(err)}`);
-			}
+			return await this._runBeforeToolCallHooks(toolCall, args as Record<string, unknown>);
 		};
 
-		this.agent.afterToolCall = async ({ toolCall, args, result, isError }) => {
-			const runner = this._extensionRunner;
-			if (!runner?.hasHandlers("tool_result")) {
-				return undefined;
-			}
-
-			const hookResult = await runner.emitToolResult({
-				type: "tool_result",
-				toolName: toolCall.name,
-				toolCallId: toolCall.id,
-				input: args as Record<string, unknown>,
-				content: result.content,
-				details: isError ? undefined : result.details,
+		this.agent.afterToolCall = async ({
+			toolCall,
+			args,
+			result,
+			isError,
+		}: {
+			toolCall: ToolCall;
+			args: unknown;
+			result: { content: (TextContent | ImageContent)[]; details?: unknown };
+			isError: boolean;
+		}) => {
+			const hookResult = await this._runAfterToolCallHooks(
+				toolCall,
+				args as Record<string, unknown>,
+				{ content: result.content, details: result.details },
 				isError,
-			});
+			);
 
 			if (!hookResult || isError) {
 				return undefined;
@@ -413,6 +393,61 @@ export class AgentSession {
 				details: hookResult.details,
 			};
 		};
+	}
+
+	private async _runBeforeToolCallHooks(
+		toolCall: ToolCall,
+		args: Record<string, unknown>,
+	): Promise<{ block?: boolean; reason?: string } | undefined> {
+		const runner = this._extensionRunner;
+		if (!runner?.hasHandlers("tool_call")) {
+			return undefined;
+		}
+
+		try {
+			return await runner.emitToolCall({
+				type: "tool_call",
+				toolName: toolCall.name,
+				toolCallId: toolCall.id,
+				input: args,
+			});
+		} catch (err) {
+			if (err instanceof Error) {
+				throw err;
+			}
+			throw new Error(`Extension failed, blocking execution: ${String(err)}`);
+		}
+	}
+
+	private async _runAfterToolCallHooks(
+		toolCall: ToolCall,
+		args: Record<string, unknown>,
+		result: { content: (TextContent | ImageContent)[]; details?: unknown },
+		isError: boolean,
+	): Promise<{ content?: (TextContent | ImageContent)[]; details?: unknown; isError?: boolean } | undefined> {
+		const runner = this._extensionRunner;
+		if (!runner?.hasHandlers("tool_result")) {
+			return undefined;
+		}
+
+		return await runner.emitToolResult({
+			type: "tool_result",
+			toolName: toolCall.name,
+			toolCallId: toolCall.id,
+			input: args,
+			content: result.content,
+			details: isError ? undefined : result.details,
+			isError,
+		});
+	}
+
+	private async _emitToolExecutionEvent(
+		event: ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent,
+	): Promise<void> {
+		if (this._extensionRunner) {
+			await this._extensionRunner.emit(event);
+		}
+		this._emit(event);
 	}
 
 	// =========================================================================
@@ -785,33 +820,30 @@ export class AgentSession {
 		name: string,
 		args: unknown,
 		options?: { toolCallId?: string; signal?: AbortSignal },
-	): Promise<{ result: import("@mariozechner/pi-agent-core").AgentToolResult<any>; isError: boolean }> {
-		const tool = this._toolRegistry.get(name);
-		if (!tool) {
-			return {
-				result: { content: [{ type: "text", text: `Tool ${name} not found` }], details: {} },
-				isError: true,
-			};
-		}
+	): Promise<{ result: AgentToolResult<unknown>; isError: boolean }> {
 		const toolCall: ToolCall = {
 			type: "toolCall",
 			id: options?.toolCallId ?? `nested_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
 			name,
-			arguments: (args ?? {}) as Record<string, any>,
+			arguments: (args ?? {}) as Record<string, unknown>,
 		};
-		try {
-			const validatedArgs = validateToolArguments(tool, toolCall);
-			const result = await tool.execute(toolCall.id, validatedArgs, options?.signal);
-			return { result, isError: false };
-		} catch (error) {
-			return {
-				result: {
-					content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-					details: {},
-				},
-				isError: true,
-			};
-		}
+
+		const executed = await executeSingleToolCall(toolCall, this._toolRegistry.get(name), {
+			signal: options?.signal,
+			emit: (event) =>
+				this._emitToolExecutionEvent(
+					event as ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent,
+				),
+			beforeToolCall: (validatedArgs, _signal) =>
+				this._runBeforeToolCallHooks(toolCall, validatedArgs as Record<string, unknown>),
+			afterToolCall: (validatedArgs, result, isError) =>
+				this._runAfterToolCallHooks(toolCall, validatedArgs as Record<string, unknown>, result, isError),
+		});
+
+		return {
+			result: { content: executed.result.content, details: executed.result.details },
+			isError: executed.isError,
+		};
 	}
 
 	private _createToolExecutionContext(): ExtensionContext {
@@ -825,6 +857,7 @@ export class AgentSession {
 				onTerminalInput: () => () => {},
 				setStatus: () => {},
 				setWorkingMessage: () => {},
+				setHiddenThinkingLabel: () => {},
 				setWidget: () => {},
 				setFooter: () => {},
 				setHeader: () => {},
@@ -843,7 +876,7 @@ export class AgentSession {
 				setTheme: () => ({ success: false, error: "UI not available" }),
 				getToolsExpanded: () => false,
 				setToolsExpanded: () => {},
-			} as ExtensionUIContext);
+			} as unknown as ExtensionUIContext);
 
 		return {
 			ui,
@@ -853,6 +886,7 @@ export class AgentSession {
 			modelRegistry: this._modelRegistry,
 			model: this.model,
 			isIdle: () => !this.isStreaming,
+			signal: this.agent.signal,
 			abort: () => this.abort(),
 			hasPendingMessages: () => this.pendingMessageCount > 0,
 			shutdown: () => this._extensionShutdownHandler?.(),
